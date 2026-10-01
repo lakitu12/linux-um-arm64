@@ -327,7 +327,18 @@ static const struct attribute_group *rng_dev_groups[];
 static struct miscdevice rng_miscdev = {
 	.minor		= HWRNG_MINOR,
 	.name		= RNG_MODULE_NAME,
-	.nodename	= "hwrng",
+	/*
+	 * Android userspace opens the hwrng node as /dev/hw_random, not
+	 * /dev/hwrng: prng_seeder (AOSP 12+, started from early-init) opens
+	 * /dev/hw_random unconditionally and hangs forever — then init
+	 * reboots the box — when it is absent. Device kernels ship the node
+	 * under that name (there is no /dev/hwrng on them), and the image's
+	 * own ueventd.rc rules the node by exactly this path. This branch
+	 * exists to run Android guests, so the devtmpfs/ueventd name follows
+	 * the Android convention. Generic users of /dev/hwrng keep the
+	 * um-arm64 branch.
+	 */
+	.nodename	= "hw_random",
 	.fops		= &rng_chrdev_ops,
 	.groups		= rng_dev_groups,
 };
