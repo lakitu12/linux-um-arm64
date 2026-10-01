@@ -2,9 +2,26 @@
 
 menu "UML-specific options"
 
+config ARCH_MMAP_RND_BITS_MIN
+	int
+	default 18
+
+config ARCH_MMAP_RND_BITS_MAX
+	int
+	default 24
+
 config UML
 	bool
 	default y
+	# Android userspace requires it, and UML should never have lacked it:
+	# the generic topdown layout gives mmap bases real ASLR (previously
+	# mm->mmap_base was the fixed TASK_UNMAPPED_BASE on this arch), and
+	# /proc/sys/vm/mmap_rnd_bits is what Android init's SetMmapRndBits
+	# action opens and hard-reboots the guest over when absent.
+	# arm64-39-bit-style entropy bounds; UML's guest VA equals the host's
+	# user address space so 24 is the ceiling that fits any phone host.
+	select ARCH_WANT_DEFAULT_TOPDOWN_MMAP_LAYOUT
+	select HAVE_ARCH_MMAP_RND_BITS
 	select ARCH_DISABLE_KASAN_INLINE if STATIC_LINK
 	select ARCH_NEEDS_DEFER_KASAN if STATIC_LINK
 	select ARCH_WANTS_DYNAMIC_TASK_STRUCT
