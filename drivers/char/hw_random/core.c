@@ -339,6 +339,18 @@ static struct miscdevice rng_miscdev = {
 	 * um-arm64 branch.
 	 */
 	.nodename	= "hw_random",
+	/*
+	 * devtmpfs creates a char node with no explicit mode as 0600 root:root
+	 * (drivers/base/devtmpfs.c). On a real device ueventd's coldboot then
+	 * applies the rule `/dev/hw_random 0400 prng_seeder`, but prng_seeder
+	 * (AOSP 12+, started from early-init) opens the node as the
+	 * prng_seeder uid and does not wait for ueventd — so under UML it hits
+	 * EACCES on the 0600 root node and init reboots. Creating it world-
+	 * readable at registration removes the race: hwrng read is not a
+	 * secret, and ueventd narrows it to 0400 prng_seeder once coldboot
+	 * runs, matching the device convention. Android-only branch policy.
+	 */
+	.mode		= 0444,
 	.fops		= &rng_chrdev_ops,
 	.groups		= rng_dev_groups,
 };
