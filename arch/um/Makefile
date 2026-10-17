@@ -71,14 +71,20 @@ KBUILD_AFLAGS += $(ARCH_INCLUDE)
 # no -m flag to ride on, so the triple has to be propagated explicitly.
 # CLANG_FLAGS is empty under gcc, so this is a no-op there.
 # The kernel's own compiler attributes are force-included rather than left to
-# -idirafter below. That flag places $(srctree)/include *after* the system
-# include directories, so <linux/compiler_types.h> resolves to the host
-# sysroot's copy whenever one exists. Debian's does not, so the kernel's is
-# found and everything works; the Android NDK's sysroot ships a 265-byte uapi
-# stub of that name, which then wins and defines none of __section, __used,
-# __aligned, noinline or the sparse annotations. The failures land far from the
-# cause -- "expected parameter declarator" on every __init in UML -- so force
-# the right definitions in instead of discovering them one macro at a time.
+# -idirafter below -- but only when building against bionic. That flag places
+# $(srctree)/include *after* the system include directories, so
+# <linux/compiler_types.h> resolves to the host sysroot's copy whenever one
+# exists: the Android NDK's sysroot ships a 265-byte uapi stub of that name,
+# which then wins and defines none of __section, __used, __aligned, noinline or
+# the sparse annotations. The failures land far from the cause -- "expected
+# parameter declarator" on every __init in UML. Against glibc, on the other
+# hand, force-including compiler_attributes.h is harmful: its macro definitions
+# hijack tokens glibc's own <stdlib.h> expands (__attribute_alloc_size__ et al),
+# and every USER_OBJS file dies with "expected ')' before '__attribute__'".
+# Historically neither case needed the include; bionic made it necessary.
+ifeq ($(UM_BIONIC),1)
+USER_CFLAGS_ATTRIBUTES = -include $(srctree)/include/linux/compiler_attributes.h
+endif
 USER_CFLAGS = $(patsubst $(KERNEL_DEFINES),,$(patsubst -I%,,$(KBUILD_CFLAGS))) \
 		$(CLANG_FLAGS) \
 		$(ARCH_INCLUDE) $(MODE_INCLUDE) $(filter -I%,$(CFLAGS)) \
@@ -86,7 +92,7 @@ USER_CFLAGS = $(patsubst $(KERNEL_DEFINES),,$(patsubst -I%,,$(KBUILD_CFLAGS))) \
 		-idirafter $(objtree)/include -D__KERNEL__ -D__UM_HOST__ \
 		-include $(srctree)/include/linux/compiler-version.h \
 		-include $(srctree)/include/linux/kconfig.h \
-		-include $(srctree)/include/linux/compiler_attributes.h \
+		$(USER_CFLAGS_ATTRIBUTES) \
 		-idirafter $(ARCH_DIR)/include/generated
 
 #This will adjust *FLAGS accordingly to the platform.
