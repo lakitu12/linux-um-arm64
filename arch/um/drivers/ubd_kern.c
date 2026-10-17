@@ -43,6 +43,7 @@
 #include "ubd.h"
 #include <os.h>
 #include "cow.h"
+#include "qcow2.h"
 
 /* Max request size is determined by sector mask - 32K */
 #define UBD_MAX_REQUEST (8 * sizeof(long))
@@ -62,6 +63,7 @@ struct io_thread_req {
 	unsigned long long offset;
 	int sectorsize;
 	int error;
+	void *qcow2;		/* qcow2 engine state, NULL for plain files */
 
 	int desc_cnt;
 	/* io_desc has to be the last element of the struct */
@@ -154,6 +156,8 @@ struct ubd {
 	unsigned no_cow:1;
 	unsigned no_trim:1;
 	struct cow cow;
+	struct qcow2_state *qcow2;	/* engine state, if the image is qcow2 */
+	void *qcow2_mem;		/* the arena that state lives in */
 	struct platform_device pdev;
 	struct gendisk *disk;
 	struct blk_mq_tag_set tag_set;
@@ -179,6 +183,8 @@ struct ubd {
 	.no_trim =		0, \
 	.shared =		0, \
 	.cow =			DEFAULT_COW, \
+	.qcow2 =		NULL, \
+	.qcow2_mem =		NULL, \
 	.lock =			__SPIN_LOCK_UNLOCKED(ubd_devs.lock), \
 }
 
@@ -371,6 +377,11 @@ __uml_help(ubd_setup,
 "    specifying a label, the filename2 must be also presented. It can be\n"
 "    an empty string, in which case the backing file is not used:\n"
 "       ubd0=File,,Serial\n\n"
+"    A file that starts with the qcow2 magic is driven by the built-in\n"
+"    qcow2 engine: reads decompress clusters, writes allocate and keep\n"
+"    the refcounts, so the image stays sparse wherever the guest has not\n"
+"    written.  Images with backing files, snapshots, encryption, extended\n"
+"    L2 entries or zstd compression are refused (with a reason) at open.\n\n"
 );
 
 static int udb_setup(char *str)
@@ -507,6 +518,27 @@ static inline int ubd_file_size(struct ubd *ubd_dev, __u64 *size_out)
 	fd = os_open_file(ubd_dev->file, of_read(OPENFLAGS()), 0);
 	if (fd < 0)
 		return fd;
+
+	/* A qcow2 image reports its virtual size, not the file's. */
+	err = qcow2_identify(fd);
+	if (err < 0) {
+		os_close_file(fd);
+		return err;
+	}
+	if (err == 1) {
+		struct qcow2_geom geom;
+		const char *reason;
+
+		err = qcow2_read_geom(fd, &geom, &reason);
+		os_close_file(fd);
+		if (err) {
+			printk(KERN_ERR "qcow2 \"%s\": %s\n",
+			       ubd_dev->file, reason);
+			return err;
+		}
+		*size_out = geom.virt_size;
+		return 0;
+	}
 
 	err = read_cow_header(file_reader, &fd, &version, &backing_file, \
 		&mtime, &size, &sector_size, &align, &bitmap_offset);
@@ -705,6 +737,11 @@ static int create_cow_file(char *cow_file, char *backing_file,
 
 static void ubd_close_dev(struct ubd *ubd_dev)
 {
+	if (ubd_dev->qcow2_mem) {
+		vfree(ubd_dev->qcow2_mem);
+		ubd_dev->qcow2_mem = NULL;
+		ubd_dev->qcow2 = NULL;
+	}
 	os_close_file(ubd_dev->fd);
 	if(ubd_dev->cow.file == NULL)
 		return;
@@ -770,6 +807,65 @@ static int ubd_open_dev(struct ubd *ubd_dev)
 				    NULL, NULL, NULL, NULL);
 		if(err < 0) goto error;
 		ubd_dev->cow.fd = err;
+	}
+
+	/*
+	 * qcow2 images get the engine instead of the plain-file path.
+	 * A COW pair with a qcow2 backing is refused: writes go to the
+	 * cow file and the read translation would be half a feature --
+	 * boot the image directly instead.
+	 */
+	if (ubd_dev->cow.file != NULL) {
+		err = qcow2_identify(ubd_dev->cow.fd);
+		if (err > 0) {
+			printk(KERN_ERR "qcow2: \"%s\" cannot back a COW pair -- boot the image directly\n",
+			       ubd_dev->cow.file);
+			err = -EOPNOTSUPP;
+			goto error;
+		}
+	} else {
+		err = qcow2_identify(fd);
+		if (err < 0)
+			goto error;
+		if (err == 1) {
+			struct qcow2_geom geom;
+			const char *reason;
+			struct qcow2_state *state;
+			void *mem;
+			unsigned long memlen;
+
+			err = qcow2_read_geom(fd, &geom, &reason);
+			if (err) {
+				printk(KERN_ERR "qcow2 \"%s\": %s\n",
+				       ubd_dev->file, reason);
+				goto error;
+			}
+			if (!ubd_dev->openflags.w)
+				geom.read_only = 1;
+			memlen = qcow2_state_size(&geom);
+			mem = vmalloc(memlen);
+			if (!mem) {
+				err = -ENOMEM;
+				goto error;
+			}
+			err = qcow2_init(fd, &geom, mem, memlen, &state);
+			if (err) {
+				vfree(mem);
+				printk(KERN_ERR "qcow2 \"%s\": init failed, errno = %d\n",
+				       ubd_dev->file, -err);
+				goto error;
+			}
+			ubd_dev->qcow2 = state;
+			ubd_dev->qcow2_mem = mem;
+			printk(KERN_INFO "qcow2 \"%s\": %llu-byte disk, %llu-byte clusters%s\n",
+			       ubd_dev->file,
+			       (unsigned long long)geom.virt_size,
+			       (unsigned long long)geom.cluster_size,
+			       geom.read_only ? ", read-only" : "");
+			if (geom.read_only && geom.ro_reason)
+				printk(KERN_INFO "qcow2 \"%s\": read-only: %s\n",
+				       ubd_dev->file, geom.ro_reason);
+		}
 	}
 	return 0;
  error:
@@ -1244,6 +1340,7 @@ static struct io_thread_req *ubd_alloc_req(struct ubd *dev, struct request *req,
 	io_req->offset = (u64) blk_rq_pos(req) << SECTOR_SHIFT;
 	io_req->offsets[0] = 0;
 	io_req->offsets[1] = dev->cow.data_offset;
+	io_req->qcow2 = dev->qcow2;
 
 	for (i = 0 ; i < desc_cnt; i++) {
 		io_req->io_desc[i].sector_mask = 0;
@@ -1436,6 +1533,15 @@ static void do_io(struct io_thread_req *req, struct io_desc *desc)
 
 		switch (req_op(req->req)) {
 		case REQ_OP_READ:
+			if (req->qcow2 && bit == 0) {
+				n = qcow2_read(req->qcow2, req->fds[bit],
+					       off, len, buf);
+				if (n) {
+					req->error = map_error(-n);
+					return;
+				}
+				break;
+			}
 			n = 0;
 			do {
 				buf = &buf[n];
@@ -1449,6 +1555,15 @@ static void do_io(struct io_thread_req *req, struct io_desc *desc)
 			if (n < len) memset(&buf[n], 0, len - n);
 			break;
 		case REQ_OP_WRITE:
+			if (req->qcow2 && bit == 0) {
+				n = qcow2_write(req->qcow2, req->fds[bit],
+						off, len, buf);
+				if (n) {
+					req->error = map_error(-n);
+					return;
+				}
+				break;
+			}
 			n = os_pwrite_file(req->fds[bit], buf, len, off);
 			if(n != len){
 				req->error = map_error(-n);
@@ -1456,6 +1571,15 @@ static void do_io(struct io_thread_req *req, struct io_desc *desc)
 			}
 			break;
 		case REQ_OP_DISCARD:
+			if (req->qcow2 && bit == 0) {
+				n = qcow2_discard(req->qcow2, req->fds[bit],
+						  off, len);
+				if (n) {
+					req->error = map_error(-n);
+					return;
+				}
+				break;
+			}
 			n = os_falloc_punch(req->fds[bit], off, len);
 			if (n) {
 				req->error = map_error(-n);
@@ -1463,6 +1587,15 @@ static void do_io(struct io_thread_req *req, struct io_desc *desc)
 			}
 			break;
 		case REQ_OP_WRITE_ZEROES:
+			if (req->qcow2 && bit == 0) {
+				n = qcow2_write_zeroes(req->qcow2,
+						       req->fds[bit], off, len);
+				if (n) {
+					req->error = map_error(-n);
+					return;
+				}
+				break;
+			}
 			n = os_falloc_zeroes(req->fds[bit], off, len);
 			if (n) {
 				req->error = map_error(-n);

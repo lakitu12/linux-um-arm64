@@ -9,7 +9,7 @@
 vector-objs := vector_kern.o vector_user.o vector_transports.o
 mconsole-objs := mconsole_kern.o mconsole_user.o
 hostaudio-objs := hostaudio_kern.o
-ubd-objs := ubd_kern.o ubd_user.o
+ubd-objs := ubd_kern.o ubd_user.o qcow2_user.o qcow2_inflate_user.o
 port-objs := port_kern.o port_user.o
 harddog-objs := harddog_kern.o
 harddog-builtin-$(CONFIG_UML_WATCHDOG) := harddog_user.o harddog_user_exp.o
