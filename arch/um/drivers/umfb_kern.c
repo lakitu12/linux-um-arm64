@@ -44,6 +44,7 @@
 #include <linux/mm.h>
 #include <linux/fb.h>
 #include <linux/slab.h>
+#include <linux/platform_device.h>
 
 #include <init.h>
 #include <os.h>
@@ -203,6 +204,7 @@ static struct os_helper_thread *umfb_pump_td;
 static unsigned char *umfb_mem;		/* the guest-visible pixels */
 static void *umfb_map;			/* the sink's mapping */
 static struct fb_info *umfb_info;
+static struct platform_device *umfb_pdev;
 static int umfb_fd = -1;
 
 static int umfb_check_var(struct fb_var_screeninfo *var, struct fb_info *info)
@@ -378,9 +380,25 @@ static int __init umfb_init(void)
 	h->full = 1;
 	h->seq = 0;
 
-	umfb_info = framebuffer_alloc(sizeof(u32) * 256, NULL);
+	/*
+	 * Register under a platform device: Xorg's fbdev driver refuses
+	 * framebuffers whose /sys/class/graphics/fbN/device/subsystem is
+	 * missing or PCI ("only touch non-PCI devices on this path",
+	 * fbdevhw.c), and a parentless virtual fb has no such link at
+	 * all -- the probe then fails without a single message.
+	 */
+	umfb_pdev = platform_device_register_simple("umfb", 0, NULL, 0);
+	if (IS_ERR(umfb_pdev)) {
+		err = PTR_ERR(umfb_pdev);
+		umfb_pdev = NULL;
+		return err;
+	}
+
+	umfb_info = framebuffer_alloc(sizeof(u32) * 256, &umfb_pdev->dev);
 	if (!umfb_info) {
 		printk(KERN_ERR "umfb: framebuffer_alloc failed\n");
+		platform_device_unregister(umfb_pdev);
+		umfb_pdev = NULL;
 		return -ENOMEM;
 	}
 	umfb_info->flags |= FBINFO_VIRTFB;
@@ -405,6 +423,8 @@ static int __init umfb_init(void)
 	err = fb_alloc_cmap(&umfb_info->cmap, 256, 0);
 	if (err) {
 		framebuffer_release(umfb_info);
+		platform_device_unregister(umfb_pdev);
+		umfb_pdev = NULL;
 		return err;
 	}
 
@@ -413,6 +433,8 @@ static int __init umfb_init(void)
 		printk(KERN_ERR "umfb: register_framebuffer failed: %d\n", err);
 		fb_dealloc_cmap(&umfb_info->cmap);
 		framebuffer_release(umfb_info);
+		platform_device_unregister(umfb_pdev);
+		umfb_pdev = NULL;
 		return err;
 	}
 
@@ -435,6 +457,8 @@ static int __init umfb_init(void)
 		unregister_framebuffer(umfb_info);
 		fb_dealloc_cmap(&umfb_info->cmap);
 		framebuffer_release(umfb_info);
+		platform_device_unregister(umfb_pdev);
+		umfb_pdev = NULL;
 		return err;
 	}
 
