@@ -119,6 +119,25 @@ config UML_SOUND
 	  between the host's dsp and mixer devices and the UML sound system.
 	  It is safe to say 'Y' here.
 
+config UML_FB
+	bool "UML framebuffer (shared-memory display)"
+	depends on FB
+	select FB_SYSMEM_HELPERS
+	help
+	  A framebuffer for UML guests whose changed pixels are mirrored
+	  into a host file or descriptor, where host-side viewers --
+	  tools/um-arm64/umview on Linux (X11 and Wayland sessions alike),
+	  the console app on Android -- pick them up.  The guest sees an
+	  ordinary /dev/fb0: redroid's SurfaceFlinger, Xorg's fbdev driver
+	  and weston's fbdev backend all land there without knowing this
+	  driver exists.
+
+	  The driver stays completely dormant unless the kernel command
+	  line carries umlfb=<path|fd:N>:<W>x<H>.  See the umlfb= --help
+	  entry for the full syntax.
+
+	  Say Y if you want a UML guest's screen on the host's screen.
+
 endmenu
 
 menu "UML Network Devices"
