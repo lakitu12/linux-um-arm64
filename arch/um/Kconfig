@@ -114,6 +114,14 @@ config UML_IOMEM_EMULATION
 	  enabling UML_PCI to reach it warns at boot that no virtio device ID
 	  is configured. Say Y to get the accessors on their own.
 
+# UML has no port I/O, so it must not carry ioport_map() either: with
+# UML_IOMEM_EMULATION on (HAS_IOMEM on), HAS_IOPORT_MAP would default to
+# y and the generic ioport_map() -- PCI_IOBASE defaults to a null pointer
+# here -- trips clang's -Wnull-pointer-arithmetic, which is fatal in
+# kernel builds.  Same shape as s390's NO_IOPORT_MAP.
+config NO_IOPORT_MAP
+	def_bool y
+
 config ISA
 	bool
 
