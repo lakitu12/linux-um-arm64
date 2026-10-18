@@ -20,7 +20,8 @@
  *   --wait SEC      wait up to SEC for a valid sink (default 30; probe
  *                   waits for the first published frame instead)
  *   --shot FILE     save a BMP of the first presented frame
- *   --frames N      exit after presenting N frames (tests)
+ *   --frames N      exit after presenting N frames (needs a live guest)
+ *   --seconds S     exit after S seconds regardless (scripts)
  *   --px X,Y        print the sink pixel at X,Y as hex (diagnostics)
  *
  * Build: make   (needs libsdl2-dev)
@@ -62,6 +63,7 @@ struct uv {
 
 	const char *shot;	/* save one BMP once the first frame is up */
 	unsigned int frame_limit;	/* exit after N presented frames */
+	long seconds;			/* exit after S seconds (0: never) */
 };
 
 static volatile sig_atomic_t interrupted;
@@ -236,12 +238,20 @@ static void uv_shot(struct uv *u, const char *file)
 		fprintf(stderr, "umview: shot: out of memory\n");
 		return;
 	}
+	/*
+	 * Re-render before reading: a back buffer's contents after
+	 * RenderPresent are not defined (GL swap), so read the frame we
+	 * draw here, then present it.
+	 */
+	SDL_RenderClear(u->ren);
+	SDL_RenderCopy(u->ren, u->tex, NULL, NULL);
 	if (SDL_RenderReadPixels(u->ren, NULL, SDL_PIXELFORMAT_ARGB8888,
 				 pix, pitch) != 0) {
 		fprintf(stderr, "umview: shot: %s\n", SDL_GetError());
 		free(pix);
 		return;
 	}
+	SDL_RenderPresent(u->ren);
 	s = SDL_CreateRGBSurfaceWithFormatFrom(pix, ww, wh, 32, pitch,
 					       SDL_PIXELFORMAT_ARGB8888);
 	if (s && SDL_SaveBMP(s, file) == 0)
@@ -286,6 +296,8 @@ int main(int argc, char **argv)
 			shot = argv[++i];
 		else if (!strcmp(a, "--frames") && i + 1 < argc)
 			u.frame_limit = (unsigned int) atol(argv[++i]);
+		else if (!strcmp(a, "--seconds") && i + 1 < argc)
+			u.seconds = atol(argv[++i]);
 		else if (!strcmp(a, "--px") && i + 1 < argc)
 			pxspec = argv[++i];
 		else if (!strcmp(a, "--probe"))
@@ -295,7 +307,7 @@ int main(int argc, char **argv)
 		else if (!strcmp(a, "--help") || !strcmp(a, "-h")) {
 			printf("usage: umview [--title S] [--scale F] [--fullscreen]\n"
 			       "              [--probe] [--wait SEC] [--shot FILE]\n"
-			       "              [--frames N] [--px X,Y] <sink>\n");
+			       "              [--frames N] [--seconds S] [--px X,Y] <sink>\n");
 			return 0;
 		} else if (a[0] == '-' && a[1] == '-' && a[2] != '\0') {
 			die("unknown option %s (see --help)", a);
@@ -381,7 +393,11 @@ int main(int argc, char **argv)
 		u.shot = NULL;
 	}
 
-	while (!interrupted && !(u.frame_limit && u.shown >= u.frame_limit)) {
+	{
+	long t_end = u.seconds > 0 ? now_ms() + u.seconds * 1000 : 0;
+
+	while (!interrupted && !(u.frame_limit && u.shown >= u.frame_limit) &&
+	       !(t_end && now_ms() >= t_end)) {
 		SDL_Event ev;
 
 		while (SDL_PollEvent(&ev)) {
@@ -435,6 +451,7 @@ int main(int argc, char **argv)
 			}
 		}
 		SDL_Delay(8);
+	}
 	}
 
 done:
