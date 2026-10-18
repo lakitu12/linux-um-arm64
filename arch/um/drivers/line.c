@@ -370,6 +370,12 @@ int setup_one_line(struct line *lines, int n, char *init,
 	struct tty_driver *driver = line->driver->driver;
 	int err = -EINVAL;
 
+	/*
+	 * driver may be NULL: if another subsystem owns the tty device
+	 * space (CONFIG_VT claims major 4), register_lines() failed and
+	 * these lines have no tty devices -- the channels still work.
+	 */
+
 	if (line->port.count) {
 		*error_out = "Device is already open";
 		goto out;
@@ -379,7 +385,8 @@ int setup_one_line(struct line *lines, int n, char *init,
 		if (line->valid) {
 			line->valid = 0;
 			kfree(line->init_str);
-			tty_unregister_device(driver, n);
+			if (driver)
+				tty_unregister_device(driver, n);
 			parse_chan_pair(NULL, line, n, opts, error_out);
 			err = 0;
 		}
@@ -391,13 +398,14 @@ int setup_one_line(struct line *lines, int n, char *init,
 			return -ENOMEM;
 		}
 		if (line->valid) {
-			tty_unregister_device(driver, n);
+			if (driver)
+				tty_unregister_device(driver, n);
 			kfree(line->init_str);
 		}
 		line->init_str = new;
 		line->valid = 1;
 		err = parse_chan_pair(new, line, n, opts, error_out);
-		if (!err) {
+		if (!err && driver) {
 			struct device *d = tty_port_register_device(&line->port,
 					driver, n, NULL);
 			if (IS_ERR(d)) {

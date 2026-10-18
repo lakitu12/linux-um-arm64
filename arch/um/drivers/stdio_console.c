@@ -152,7 +152,9 @@ static int stdio_init(void)
 	err = register_lines(&driver, &console_ops, vts,
 					ARRAY_SIZE(vts));
 	if (err)
-		return err;
+		printk(KERN_WARNING
+		       "stdio console: no tty devices (%d); using the channels\n",
+		       err);
 
 	printk(KERN_INFO "Initialized stdio console driver\n");
 
