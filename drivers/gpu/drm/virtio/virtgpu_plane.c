@@ -28,6 +28,7 @@
 #include <drm/drm_fourcc.h>
 #include <drm/drm_gem_atomic_helper.h>
 #include <linux/virtio_dma_buf.h>
+#include <linux/printk.h>
 #include <drm/drm_managed.h>
 #include <drm/drm_panic.h>
 #include <drm/drm_print.h>
@@ -260,8 +261,19 @@ static void virtio_gpu_primary_plane_update(struct drm_plane *plane,
 		return;
 	}
 
-	if (!drm_atomic_helper_damage_merged(old_state, plane->state, &rect))
-		return;
+	{
+		bool valid = drm_atomic_helper_damage_merged(old_state, plane->state, &rect);
+
+		pr_info("DBG-VGPU ign=%d blob=%s clipn=%u fbchg=%d merged=%d,%d-%d,%d\n",
+			plane->state->ignore_damage_clips,
+			plane->state->fb_damage_clips ? "y" : "n",
+			plane->state->fb_damage_clips ?
+				(unsigned)(plane->state->fb_damage_clips->length / 16) : 0,
+			plane->state->fb != old_state->fb,
+			rect.x1, rect.y1, rect.x2, rect.y2);
+		if (!valid)
+			return;
+	}
 
 	bo = gem_to_virtio_gpu_obj(plane->state->fb->obj[0]);
 	if (bo->dumb)

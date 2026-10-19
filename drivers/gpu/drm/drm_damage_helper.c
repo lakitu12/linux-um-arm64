@@ -31,6 +31,7 @@
  **************************************************************************/
 
 #include <linux/export.h>
+#include <linux/printk.h>
 
 #include <drm/drm_atomic.h>
 #include <drm/drm_damage_helper.h>
@@ -79,6 +80,8 @@ void drm_atomic_helper_check_plane_damage(struct drm_atomic_commit *state,
 			return;
 
 		if (drm_atomic_crtc_needs_modeset(crtc_state)) {
+			pr_info("DBG-DROP plane=%s (modeset)\n",
+				plane_state->plane->name);
 			drm_property_blob_put(plane_state->fb_damage_clips);
 			plane_state->fb_damage_clips = NULL;
 		}
@@ -178,6 +181,10 @@ retry:
 
 		drm_property_replace_blob(&plane_state->fb_damage_clips,
 					  damage);
+		pr_info("DBG-DFB plane=%s blob=%s clipn=%u\n", plane->name,
+			plane_state->fb_damage_clips ? "y" : "n",
+			plane_state->fb_damage_clips ?
+				(unsigned)(plane_state->fb_damage_clips->length / 16) : 0);
 	}
 
 	ret = drm_atomic_commit(state);

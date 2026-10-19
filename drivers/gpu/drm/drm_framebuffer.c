@@ -21,6 +21,7 @@
  */
 
 #include <linux/export.h>
+#include <linux/printk.h>
 #include <linux/uaccess.h>
 
 #include <drm/drm_atomic.h>
@@ -760,6 +761,11 @@ int drm_mode_dirtyfb_ioctl(struct drm_device *dev,
 			goto out_err2;
 		}
 	}
+
+	if (num_clips > 0)
+		pr_info("DBG-DIRTYFB fb=%u flags=%u n=%d clip0=%d,%d-%d,%d\n",
+			r->fb_id, flags, num_clips, clips[0].x1, clips[0].y1,
+			clips[0].x2, clips[0].y2);
 
 	if (fb->funcs->dirty) {
 		ret = fb->funcs->dirty(fb, file_priv, flags, r->color,
