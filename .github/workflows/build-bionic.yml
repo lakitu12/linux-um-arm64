@@ -1,0 +1,111 @@
+name: build-bionic
+
+# Kernel builds for the uml-android app live HERE, in the public kernel repo:
+# Actions minutes and artifact storage are free for public repositories, while
+# the app repo (lakitu12/uml-android) is private and billed. This workflow used
+# to live in the app repo and checked the kernel out beside it; the only thing
+# that has to cross the boundary now is the built ELF.
+#
+# Artifacts: linux-bionic (static aarch64 bionic ELF for the app) + stub_exe_bionic.
+# Config fragments come from tools/um-arm64/config/ in this very tree, so a build
+# is reproducible from this commit alone.
+
+on:
+  workflow_dispatch:
+    inputs:
+      extra_config:
+        description: "Extra kconfig fragments, space separated, paths relative to tools/um-arm64"
+        required: false
+        type: string
+        default: "config/redroid.config config/pages4k.config config/netfilter.config config/fb-vfb.config config/umfb.config config/smp.config config/virtio-gpu.config"
+      suffix:
+        description: "Artifact name suffix (e.g. 4k-vgpu); empty = plain"
+        required: false
+        type: string
+        default: ""
+
+env:
+  NDK_VER: "r27c"          # what upstream build-bionic.sh documents; zip = 664 MB
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - name: Free disk
+        run: sudo rm -rf /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL || true
+
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang llvm lld libelf-dev zlib1g-dev flex bison make file
+        shell: bash
+
+      - name: Cache NDK
+        id: ndk-cache
+        uses: actions/cache@v4
+        with:
+          path: /home/runner/android-ndk
+          key: ndk-${{ env.NDK_VER }}
+
+      - name: Download NDK
+        if: steps.ndk-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          curl -fL --retry 3 --retry-delay 5 \
+            "https://dl.google.com/android/repository/android-ndk-${NDK_VER}-linux.zip" \
+            -o /tmp/ndk.zip
+          unzip -q /tmp/ndk.zip -d /tmp/ndk-x
+          mkdir -p /home/runner/android-ndk
+          mv /tmp/ndk-x/android-ndk-${NDK_VER}/* /home/runner/android-ndk/
+          rm -rf /tmp/ndk.zip /tmp/ndk-x
+          test -x /home/runner/android-ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/clang
+        shell: bash
+
+      - name: Build bionic kernel
+        working-directory: tools/um-arm64
+        env:
+          NDK: /home/runner/android-ndk
+          ART: ${{ github.workspace }}/artifacts
+          EXTRA_CONFIG: ${{ inputs.extra_config }}
+        run: |
+          # No ccache on purpose: build-bionic.sh drives the compiler through a
+          # PATH shim that appends --target, so nothing is ever invoked as
+          # `ccache clang`.
+          bash harness/build-bionic.sh
+        shell: bash
+
+      - name: Assert the fragments landed
+        run: |
+          set -e
+          CFG="${TMPDIR:-/tmp}/umarm-build-bionic/.config"
+          test -f "$CFG" || { echo "no build .config at $CFG"; exit 1; }
+          for k in CONFIG_ANDROID_BINDERFS CONFIG_BPF_SYSCALL CONFIG_PSI CONFIG_MEMCG \
+                   CONFIG_NETFILTER CONFIG_FB_VIRTUAL CONFIG_UML_FB CONFIG_EXT4_FS_POSIX_ACL \
+                   CONFIG_VIRTIO_UML CONFIG_DRM_VIRTIO_GPU; do
+            grep -E "^$k=y$" "$CFG" >/dev/null || { echo "fragment drop: $k missing"; exit 1; }
+          done
+          echo "config assertions PASS"
+
+      - name: Collect
+        run: |
+          set -e
+          A="${{ github.workspace }}/artifacts"
+          test -f "$A/linux-bionic" || { echo "linux-bionic missing"; exit 1; }
+          sha256sum "$A/linux-bionic" | tee "$A/SHA256SUMS"
+          [ -f "$A/stub_exe_bionic" ] && sha256sum "$A/stub_exe_bionic" | tee -a "$A/SHA256SUMS"
+          file "$A/linux-bionic"
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: uml-arm64-bionic${{ inputs.suffix && format('-{0}', inputs.suffix) || '' }}-${{ github.run_number }}
+          path: |
+            artifacts/linux-bionic
+            artifacts/stub_exe_bionic
+            artifacts/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 14
