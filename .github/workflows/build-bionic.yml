@@ -17,7 +17,7 @@ on:
         description: "Extra kconfig fragments, space separated, paths relative to tools/um-arm64"
         required: false
         type: string
-        default: "config/redroid.config config/pages4k.config config/netfilter.config config/fb-vfb.config config/umfb.config config/smp.config config/virtio-gpu.config"
+        default: "config/redroid.config config/pages4k.config config/netfilter.config config/fb-vfb.config config/umfb.config config/smp.config config/virtio-gpu.config config/virtio-snd.config"
       suffix:
         description: "Artifact name suffix (e.g. 4k-vgpu); empty = plain"
         required: false
@@ -85,7 +85,8 @@ jobs:
           test -f "$CFG" || { echo "no build .config at $CFG"; exit 1; }
           for k in CONFIG_ANDROID_BINDERFS CONFIG_BPF_SYSCALL CONFIG_PSI CONFIG_MEMCG \
                    CONFIG_NETFILTER CONFIG_FB_VIRTUAL CONFIG_UML_FB CONFIG_EXT4_FS_POSIX_ACL \
-                   CONFIG_VIRTIO_UML CONFIG_DRM_VIRTIO_GPU; do
+                   CONFIG_VIRTIO_UML CONFIG_DRM_VIRTIO_GPU CONFIG_SND_VIRTIO \
+                   CONFIG_SND_PCM CONFIG_UML_IOMEM_EMULATION; do
             grep -E "^$k=y$" "$CFG" >/dev/null || { echo "fragment drop: $k missing"; exit 1; }
           done
           echo "config assertions PASS"
